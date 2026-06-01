@@ -1,23 +1,18 @@
-#!/usr/bin/env python3
-#
-# env_redactor.py — redact .env files from stdin or files.
-# Usage examples:
-#   cat .env | env_redactor.py
-#   env_redactor.py .env > .env.redacted
-# Options:
-#   --mode values|keys|both     What to redact (default: values)
-#   --placeholder TEXT          Replacement text (default: REDACTED)
-#   --keep-length               Preserve original value length using '*' characters
-#   --strip-secrets             Remove lines that look like secrets entirely
-#   -o FILE, --output FILE      Write to file (default stdout)
-# Notes:
-# - Preserves comments, blank lines, and export prefixes.
-# - Handles quoted values, escaped quotes, and inline comments (#) outside quotes.
+"""Core redaction logic for environment files."""
 
-import argparse, sys, re, hashlib
+import re
+import hashlib
 
 
 def find_unquoted_hash(s: str) -> int:
+    """Find the position of an unquoted hash character in a string.
+    
+    Args:
+        s: The string to search
+        
+    Returns:
+        The index of the first unquoted hash, or -1 if not found
+    """
     in_single = in_double = False
     escape = False
     for i, ch in enumerate(s):
@@ -37,6 +32,14 @@ def find_unquoted_hash(s: str) -> int:
 
 
 def split_inline_comment(s: str):
+    """Split a string into content and inline comment parts.
+    
+    Args:
+        s: The string to split
+        
+    Returns:
+        A tuple of (content, comment)
+    """
     idx = find_unquoted_hash(s)
     if idx == -1:
         return s, ""
@@ -44,6 +47,14 @@ def split_inline_comment(s: str):
 
 
 def parse_env_line(line: str):
+    """Parse a line from an environment file.
+    
+    Args:
+        line: The line to parse
+        
+    Returns:
+        A dictionary containing the parsed components
+    """
     original = line
     nl = ""
     if line.endswith("\n"):
@@ -89,6 +100,16 @@ def parse_env_line(line: str):
 
 
 def make_placeholder(original_value: str, placeholder: str, keep_length: bool) -> str:
+    """Create a placeholder for a redacted value.
+    
+    Args:
+        original_value: The original value to redact
+        placeholder: The placeholder text to use
+        keep_length: Whether to preserve the original length
+        
+    Returns:
+        The placeholder string
+    """
     if keep_length:
         v = original_value
         if (len(v) >= 2) and ((v[0] == v[-1]) and v[0] in ("'", '"')):
@@ -105,11 +126,31 @@ def make_placeholder(original_value: str, placeholder: str, keep_length: bool) -
 
 
 def redact_key_name(name: str) -> str:
+    """Redact a key name by hashing it.
+    
+    Args:
+        name: The key name to redact
+        
+    Returns:
+        A redacted key name
+    """
     h = hashlib.sha256(name.encode()).hexdigest()[:10].upper()
     return f"VAR_{h}"
 
 
 def process_line(d, mode, placeholder, keep_length, strip_secrets):
+    """Process a parsed line and apply redaction.
+    
+    Args:
+        d: The parsed line dictionary
+        mode: Redaction mode ('values', 'keys', or 'both')
+        placeholder: The placeholder text
+        keep_length: Whether to preserve original length
+        strip_secrets: Whether to remove secret lines entirely
+        
+    Returns:
+        The processed line as a string
+    """
     if d["type"] == "pass":
         return d["leading"] + d["content"] + d["trailing"]
     if d["type"] == "raw":
@@ -147,71 +188,16 @@ def process_line(d, mode, placeholder, keep_length, strip_secrets):
 
 
 def process_stream(inp, out, mode, placeholder, keep_length, strip_secrets):
+    """Process a stream of lines and apply redaction.
+    
+    Args:
+        inp: Input stream
+        out: Output stream
+        mode: Redaction mode
+        placeholder: Placeholder text
+        keep_length: Whether to preserve length
+        strip_secrets: Whether to strip secret lines
+    """
     for line in inp:
         d = parse_env_line(line)
         out.write(process_line(d, mode, placeholder, keep_length, strip_secrets))
-
-
-def main():
-    ap = argparse.ArgumentParser(
-        description="Redact .env files (filter). Reads stdin or files; writes to stdout by default."
-    )
-    ap.add_argument("files", nargs="*", help="Input .env files (default: stdin)")
-    ap.add_argument(
-        "--mode",
-        choices=["values", "keys", "both"],
-        default="values",
-        help="What to redact (default: values)",
-    )
-    ap.add_argument(
-        "--placeholder",
-        default="REDACTED",
-        help="Replacement text when not using --keep-length (default: REDACTED)",
-    )
-    ap.add_argument(
-        "--keep-length",
-        action="store_true",
-        help="Preserve original value length with '*'s (keeps quote style)",
-    )
-    ap.add_argument(
-        "--strip-secrets",
-        action="store_true",
-        help="Remove lines whose keys look like secrets entirely",
-    )
-    ap.add_argument("-o", "--output", help="Output file (default: stdout)")
-    args = ap.parse_args()
-
-    if args.output:
-        out = open(args.output, "w", encoding="utf-8")
-    else:
-        out = sys.stdout
-
-    if args.files:
-        for i, path in enumerate(args.files):
-            with open(path, "r", encoding="utf-8") as f:
-                process_stream(
-                    f,
-                    out,
-                    args.mode,
-                    args.placeholder,
-                    args.keep_length,
-                    args.strip_secrets,
-                )
-            if i < len(args.files) - 1:
-                out.write("\n")
-    else:
-        process_stream(
-            sys.stdin,
-            out,
-            args.mode,
-            args.placeholder,
-            args.keep_length,
-            args.strip_secrets,
-        )
-
-    if out is not sys.stdout:
-        out.close()
-
-
-if __name__ == "__main__":
-    main()

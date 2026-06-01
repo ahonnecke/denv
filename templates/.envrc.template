@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Dynamic project context for direnv
+# Reads from ./requirements/.current-requirement if it exists
+
+PROJECT_BASE_NAME="{{PROJECT_BASE_NAME}}"
+
+if [ -f "requirements/.current-requirement" ]; then
+    CURRENT_REQ=$(cat requirements/.current-requirement | head -n1 | tr -d '\n\r')
+    export PROJECT_NAME="${PROJECT_BASE_NAME}: ${CURRENT_REQ}"
+else
+    export PROJECT_NAME="${PROJECT_BASE_NAME}"
+fi
+
+# Optional: Set a custom prompt prefix
+export PROJECT_PROMPT_PREFIX="[${PROJECT_NAME}]"
+
+# For debugging
+# echo "Project context: $PROJECT_NAME" >&2

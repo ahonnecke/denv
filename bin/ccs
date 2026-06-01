@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Wrapper for workspace-summary.py that defaults to crewcapableai
+# Links: ~/bin/ccs -> ~/src/denv/bin/ccs
+
+# Get the directory where this script lives (resolve symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+
+# Call workspace-summary.py with crewcapableai prefix and cc symlinks
+exec "$SCRIPT_DIR/workspace-summary.py" crewcapableai --symlink-prefix cc "$@"

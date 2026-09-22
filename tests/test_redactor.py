@@ -30,7 +30,7 @@ class TestFindUnquotedHash:
         assert find_unquoted_hash('"value" # comment') == 8
 
     def test_escaped_quote(self):
-        assert find_unquoted_hash('"value \\" # still inside" # outside') == 27
+        assert find_unquoted_hash('"value \\" # still inside" # outside') == 26
 
 
 class TestSplitInlineComment:

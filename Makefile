@@ -1,11 +1,15 @@
 .PHONY: help install install-dev test test-cov format lint clean build upload
 
+VENV ?= .venv
+PY := $(VENV)/bin
+LOCALBIN ?= $(HOME)/.local/bin
+
 help:
-	@echo "denv - Environment file redaction tool"
+	@echo "denv - per-project env store + .env redactor"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  install      - Install package"
-	@echo "  install-dev  - Install package in development mode with dev dependencies"
+	@echo "  install      - venv + editable install + symlink 'denv' onto ~/.local/bin"
+	@echo "  install-dev  - install + dev dependencies (pytest, black, ...)"
 	@echo "  test         - Run tests"
 	@echo "  test-cov     - Run tests with coverage report"
 	@echo "  format       - Format code with black and isort"
@@ -14,18 +18,23 @@ help:
 	@echo "  build        - Build distribution packages"
 	@echo "  upload       - Upload to PyPI (requires credentials)"
 
+# venv-local install; symlink the console script onto $PATH (the ~/.local/bin
+# convention). Re-run any time; the symlink tracks the venv shim in place.
 install:
-	pip install .
+	python3 -m venv $(VENV)
+	$(PY)/pip install -e . -q
+	mkdir -p $(LOCALBIN)
+	ln -sfn $(CURDIR)/$(VENV)/bin/denv $(LOCALBIN)/denv
+	@echo "installed: $(LOCALBIN)/denv -> $(CURDIR)/$(VENV)/bin/denv"
 
-install-dev:
-	pip install -e .
-	pip install -r requirements-dev.txt
+install-dev: install
+	$(PY)/pip install -r requirements-dev.txt -q
 
 test:
-	pytest
+	$(PY)/pytest
 
 test-cov:
-	pytest --cov=denv --cov-report=html --cov-report=term
+	$(PY)/pytest --cov=denv --cov-report=html --cov-report=term
 
 format:
 	black src/ tests/

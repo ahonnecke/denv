@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "denv"
-version = "1.0.0"
-description = "A tool for redacting sensitive information from .env files"
+version = "2.0.0"
+description = "Durable env-var store (public/secret classification, per-env value files, push adapters) plus a .env redactor"
 readme = "README.md"
 authors = [
     {name = "ahonnecke", email = "ahonnecke@example.com"}
@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: Security",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-keywords = ["env", "environment", "redact", "security", "secrets"]
+keywords = ["env", "environment", "redact", "security", "secrets", "store", "dotenv", "config", "vault"]
 requires-python = ">=3.8"
 
 [project.urls]

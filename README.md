@@ -1,349 +1,105 @@
-# denv
+# denv — durable per-project env store + redactor
 
-A Python tool for redacting sensitive information from `.env` files. Perfect for sharing configuration examples, creating documentation, or safely logging environment configurations.
+`denv` is the single source of truth for a project's environment variables, safe to expose to
+all three consumers: the **local app**, the **deployed environment** (staging/prod), and an
+**LLM session**. It stores env vars once per project in `~/.config/<project>/`, classifies each
+key `public|secret`, and renders secret-safe output by construction — the same engine that
+powers its standalone `.env` redactor.
 
-## Features
+- **Store**: per-project value files + a manifest that classifies keys and declares deploy targets.
+- **Redact**: turn any `.env` (or a stored env) into a shareable/loggable copy with secrets removed.
 
-- **Flexible Redaction Modes**: Redact values, keys, or both
-- **Smart Comment Handling**: Preserves comments, blank lines, and formatting
-- **Quote-Aware Parsing**: Handles single quotes, double quotes, and escaped characters
-- **Length Preservation**: Option to maintain original value length with asterisks
-- **Secret Stripping**: Automatically remove lines containing sensitive keys
-- **Stream Processing**: Works with stdin/stdout for easy piping
+Point a project at this repo: **"use `~/src/denv`"** — this README is the guide; `denv --help`
+is the command reference.
 
-## Installation
+## Install
 
-### From Source
-
-```bash
-# Clone the repository
-git clone https://github.com/ahonnecke/denv.git
-cd denv
-
-# Install in development mode
-pip install -e .
-
-# Or install normally
-pip install .
+```sh
+cd ~/src/denv && make install     # venv + editable install + symlink `denv` onto ~/.local/bin
+denv --help
 ```
 
-### From PyPI (when published)
+## Mental model
 
-```bash
-pip install denv
+- **One store per project:** `~/.config/<project>/` — plaintext, mode 600, local-only (not
+  committed; "durable" = your machine's backups). Override the root with `DENV_HOME`.
+- **`manifest` classifies each key** `public|secret` × `llm:read|llm:blind`. This is the **LLM
+  safety boundary**, not just file perms:
+  - `ls` / `get` print `public` values but mask `secret` ones to `SET` / `MISSING`.
+  - `load` writes a 600 env file and **never prints values**; `load --redacted` writes a
+    shareable copy with secret values replaced.
+  - `push` prints a masked plan and only executes with `--apply`.
+- **Value files:** `common.env` (all envs) + `<env>.env` (per env, overrides common). A legacy
+  flat `.env` is read as a fallback when neither exists.
+- **`push` deploys an env** via a pluggable adapter: `vercel | gh | supabase | cloudflare |
+  spaces | none`.
+
+## Onboard a project (from any repo — the store lives in `~/.config`, never the repo)
+
+```sh
+denv init myproj dev staging prod      # scaffold ~/.config/myproj/{manifest,common.env,<env>.env} (600)
+$EDITOR ~/.config/myproj/prod.env      # KEY=VALUE per env; common.env for shared
+$EDITOR ~/.config/myproj/manifest      # classify keys + set push targets (grammar below)
+denv ls myproj                         # verify: public values shown, secrets masked
+denv doctor myproj                     # perms + declared-vs-present check
 ```
 
-## Usage
+An **existing store with a flat `.env`** needs no init — drop a `manifest` beside it (the flat
+`.env` is read as a fallback).
 
-### Basic Usage
+## Commands
 
-Redact values from stdin:
-
-```bash
-cat .env | denv
+```sh
+denv ls     myproj [env]               # keys × class × llm × value|mask
+denv get    myproj prod API_URL        # one value (add --unmask to reveal a secret)
+denv load   myproj dev --to .env       # LOCAL APP: write a 600 .env, values never printed
+denv load   myproj dev --redacted      # a shareable/loggable copy: secret values redacted
+denv push   myproj prod                # DEPLOY: dry-run plan; add --apply to execute
+denv doctor myproj                     # perms (incl. from: files) + declared-vs-present
+denv envs   myproj
+denv init   myproj [env ...]
+denv redact [file ...] [--mode values|keys|both] [--keep-length] [--strip-secrets] [-o OUT]
 ```
 
-Redact values from a file:
-
-```bash
-denv .env
-```
-
-Save output to a file:
-
-```bash
-denv .env -o .env.redacted
-# or
-cat .env | denv > .env.redacted
-```
-
-### Redaction Modes
-
-**Redact values only (default):**
-
-```bash
-cat .env | denv
-# or explicitly
-cat .env | denv --mode values
-```
-
-Input:
-```
-DATABASE_URL="postgresql://user:pass@localhost/db"
-API_KEY=secret123
-```
-
-Output:
-```
-DATABASE_URL="REDACTED"
-API_KEY=REDACTED
-```
-
-**Redact keys only:**
-
-```bash
-cat .env | denv --mode keys
-```
-
-Input:
-```
-DATABASE_URL="postgresql://user:pass@localhost/db"
-API_KEY=secret123
-```
-
-Output:
-```
-VAR_A1B2C3D4E5="postgresql://user:pass@localhost/db"
-VAR_F6G7H8I9J0=secret123
-```
-
-**Redact both keys and values:**
-
-```bash
-cat .env | denv --mode both
-```
-
-Output:
-```
-VAR_A1B2C3D4E5="REDACTED"
-VAR_F6G7H8I9J0=REDACTED
-```
-
-### Advanced Options
-
-**Keep original length with asterisks:**
-
-```bash
-cat .env | denv --keep-length
-```
-
-Input:
-```
-API_KEY="secret123"
-PASSWORD=mypassword
-```
-
-Output:
-```
-API_KEY="*********"
-PASSWORD=**********
-```
-
-**Strip secret lines entirely:**
-
-```bash
-cat .env | denv --strip-secrets
-```
-
-Input:
-```
-DATABASE_URL="postgresql://localhost/db"
-API_KEY=secret123
-SECRET_TOKEN=abc123
-DEBUG=true
-```
-
-Output:
-```
-DATABASE_URL="postgresql://localhost/db"
-DEBUG=true
-```
-
-Lines containing these keywords are considered secrets:
-- `secret`
-- `password`/`passwd`
-- `token`
-- `apikey`/`api_key`
-- `key`
-- `private`
-- `credential`
-
-**Custom placeholder:**
-
-```bash
-cat .env | denv --placeholder "***HIDDEN***"
-```
-
-Output:
-```
-API_KEY="***HIDDEN***"
-```
-
-### Real-World Example
-
-From your usage example:
-
-```bash
-cat .env.local | denv
-```
-
-Input:
-```
-BLOB_READ_WRITE_TOKEN="vercel_blob_rw_abc123"
-KV_URL="https://my-kv.upstash.io"
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-GITLAB_TOKEN="glpat-xxxxxxxxxxxxxxxxxxxx"
-DATABASE_URL="postgresql://user:pass@localhost:5432/mydb"
-```
-
-Output:
-```
-BLOB_READ_WRITE_TOKEN="REDACTED"
-KV_URL="REDACTED"
-AWS_ACCESS_KEY_ID=REDACTED
-AWS_SECRET_ACCESS_KEY=REDACTED
-GITLAB_TOKEN="REDACTED"
-DATABASE_URL="REDACTED"
-```
-
-### Multiple Files
-
-Process multiple files:
-
-```bash
-denv .env .env.local .env.production
-```
-
-## Command-Line Options
+## Manifest grammar
 
 ```
-usage: denv [-h] [--mode {values,keys,both}] [--placeholder TEXT]
-            [--keep-length] [--strip-secrets] [-o FILE]
-            [files ...]
-
-Redact .env files (filter). Reads stdin or files; writes to stdout by default.
-
-positional arguments:
-  files                 Input .env files (default: stdin)
-
-options:
-  -h, --help            show this help message and exit
-  --mode {values,keys,both}
-                        What to redact (default: values)
-  --placeholder TEXT    Replacement text when not using --keep-length
-                        (default: REDACTED)
-  --keep-length         Preserve original value length with '*'s (keeps quote
-                        style)
-  --strip-secrets       Remove lines whose keys look like secrets entirely
-  -o FILE, --output FILE
-                        Output file (default: stdout)
+project  <name>
+envs     <e1> <e2> ...
+default_class  public|secret            # keys not listed default here (default: secret)
+default_llm    read|blind               #                              (default: blind)
+push  <env>  <adapter> [args...]         # vercel|gh|supabase|cloudflare|spaces|none
+key   <NAME> <public|secret> [llm:read|llm:blind] [from:<file>] [from:<env>=<file> ...]
 ```
 
-## Features in Detail
+- `public llm:read` → value is safe for an LLM to see (URLs, ids, publishable keys).
+- `secret llm:blind` → masked to `SET`/`MISSING` on read; redacted by `load --redacted`.
+- `from:<file>` → source this key from a specific file (any env).
+- `from:<env>=<file>` → source it per-env; the key is shown **only** under the envs it names.
 
-### Comment Preservation
+## Legacy stores: describe, don't migrate
 
-Comments are preserved, both full-line and inline:
+A project whose env vars already live in per-env or prefixed files stays where it is — the
+manifest just teaches denv to read it. Example (`~/.config/chitchat/manifest`), mapping three
+different "which env" schemes without moving a file:
 
-Input:
-```
-# Database configuration
-DATABASE_URL="postgresql://localhost/db"  # Production database
-API_KEY=secret123  # API key for external service
-```
+- **env in the keyname** (`DB_STAGING_*` / `DB_PROD_*` in one `db.env`):
+  `key DB_PROD_HOST public llm:read from:prod=db.env`
+- **env in the filename, same keyname** (`paypal-live.env` / `paypal-sandbox.env`):
+  `key PAYPAL_CLIENT_ID secret llm:blind from:prod=paypal-live.env from:staging=paypal-sandbox.env`
+- **deployed config owned elsewhere** (chitchat's real source of truth is DO Spaces):
+  `push prod spaces prod` — the `spaces` adapter delegates to `make env.<env>.set`.
 
-Output:
-```
-# Database configuration
-DATABASE_URL="REDACTED"  # Production database
-API_KEY=REDACTED  # API key for external service
-```
+## Design decisions
 
-### Export Statement Support
-
-Handles `export` statements:
-
-Input:
-```
-export DATABASE_URL="postgresql://localhost/db"
-export API_KEY=secret123
-```
-
-Output:
-```
-export DATABASE_URL="REDACTED"
-export API_KEY=REDACTED
-```
-
-### Quote Handling
-
-Properly handles single quotes, double quotes, and unquoted values:
-
-Input:
-```
-SINGLE='value'
-DOUBLE="value"
-UNQUOTED=value
-```
-
-Output:
-```
-SINGLE='REDACTED'
-DOUBLE="REDACTED"
-UNQUOTED=REDACTED
-```
-
-## Use Cases
-
-1. **Documentation**: Create safe examples for README files
-2. **Debugging**: Share configuration without exposing secrets
-3. **CI/CD**: Generate template files from production configs
-4. **Logging**: Safely log environment configurations
-5. **Code Reviews**: Share environment setups without credentials
+- **Plaintext, perms-only, local-only.** No encryption/commit (`age` is available if that ever
+  changes). `doctor` flags any secret file not `600`/`640`.
+- **Classification is the LLM boundary**, not file perms alone — an agent reads the manifest and
+  public values freely; secret values never enter its context unless it `--unmask`s.
+- **Describe legacy layouts, never rewrite a live repo's env consumption.**
 
 ## Development
 
-### Running Tests
-
-```bash
-pytest
+```sh
+make install && .venv/bin/pytest -q
 ```
-
-### Code Formatting
-
-```bash
-black src/ tests/
-isort src/ tests/
-```
-
-### Project Structure
-
-```
-denv/
-├── src/
-│   └── denv/
-│       ├── __init__.py      # Package initialization
-│       ├── cli.py           # Command-line interface
-│       └── redactor.py      # Core redaction logic
-├── tests/
-│   ├── __init__.py
-│   ├── test_redactor.py     # Unit tests
-│   └── test_cli.py          # CLI tests
-├── pyproject.toml           # Package configuration
-├── setup.py                 # Setup script
-├── README.md                # This file
-├── LICENSE                  # MIT License
-└── .gitignore              # Git ignore rules
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Author
-
-ahonnecke
-
-## Changelog
-
-### 1.0.0 (2024)
-- Initial release
-- Support for value, key, and combined redaction
-- Length preservation option
-- Secret stripping functionality
-- Stream processing support

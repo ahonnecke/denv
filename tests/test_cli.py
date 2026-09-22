@@ -6,6 +6,41 @@ from denv.cli import main
 from denv.redactor import process_stream
 
 
+class TestRedactSubcommand:
+    """The redactor is now invoked as `denv redact ...`."""
+
+    def test_redact_values_from_file(self, tmp_path, capsys):
+        src = tmp_path / "in.env"
+        src.write_text("API_KEY=secret123\nDEBUG=true\n")
+        main(["redact", str(src)])
+        out = capsys.readouterr().out
+        assert "API_KEY=REDACTED" in out
+        assert "DEBUG=REDACTED" in out
+
+    def test_redact_to_output_file(self, tmp_path):
+        src = tmp_path / "in.env"
+        src.write_text("PASSWORD=hunter2\n")
+        dst = tmp_path / "out.env"
+        main(["redact", str(src), "--keep-length", "-o", str(dst)])
+        assert dst.read_text().strip() == "PASSWORD=*******"
+
+    def test_redact_mode_both(self, tmp_path, capsys):
+        src = tmp_path / "in.env"
+        src.write_text("API_KEY=secret123\n")
+        main(["redact", str(src), "--mode", "both"])
+        out = capsys.readouterr().out
+        assert "VAR_" in out
+        assert "API_KEY" not in out
+        assert "secret123" not in out
+
+    def test_redact_custom_placeholder(self, tmp_path, capsys):
+        src = tmp_path / "in.env"
+        src.write_text("API_KEY=secret\n")
+        main(["redact", str(src), "--placeholder", "***HIDDEN***"])
+        out = capsys.readouterr().out
+        assert "API_KEY=***HIDDEN***" in out
+
+
 class TestCLI:
     """Tests for CLI functionality."""
 
@@ -43,7 +78,7 @@ class TestCLI:
         process_stream(inp, out, "values", "REDACTED", True, False)
 
         result = out.getvalue()
-        assert "PASSWORD=**********" in result
+        assert "PASSWORD=*********" in result  # 'secret123' is 9 chars -> 9 stars
 
     def test_process_stream_strip_secrets(self):
         """Test stream processing with secret stripping."""

@@ -27,7 +27,9 @@ denv --help
   safety boundary**, not just file perms:
   - `ls` / `get` print `public` values but mask `secret` ones to `SET` / `MISSING`.
   - `load` writes a 600 env file and **never prints values**; `load --redacted` writes a
-    shareable copy with secret values replaced.
+    shareable copy with secret values replaced. `--to` is confined to the **current directory
+    tree** — a target under `/tmp`, `~`, or `../..` is refused so unredacted secrets can't leak
+    to arbitrary paths (`--allow-external` overrides deliberately).
   - `push` prints a masked plan and only executes with `--apply`.
 - **Value files:** `common.env` (all envs) + `<env>.env` (per env, overrides common). A legacy
   flat `.env` is read as a fallback when neither exists.
@@ -52,7 +54,7 @@ An **existing store with a flat `.env`** needs no init — drop a `manifest` bes
 ```sh
 denv ls     myproj [env]               # keys × class × llm × value|mask
 denv get    myproj prod API_URL        # one value (add --unmask to reveal a secret)
-denv load   myproj dev --to .env       # LOCAL APP: write a 600 .env, values never printed
+denv load   myproj dev --to .env       # LOCAL APP: write a 600 .env (cwd-tree only), values never printed
 denv load   myproj dev --redacted      # a shareable/loggable copy: secret values redacted
 denv push   myproj prod                # DEPLOY: dry-run plan; add --apply to execute
 denv doctor myproj                     # perms (incl. from: files) + declared-vs-present

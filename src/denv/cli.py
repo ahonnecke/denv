@@ -99,7 +99,15 @@ def _add_store_parsers(sub) -> None:
         action="store_true",
         help="Redact secret values in the written file (safe to share)",
     )
-    p.set_defaults(func=lambda a: store.cmd_load(a.project, a.env, a.to, a.redacted))
+    p.add_argument(
+        "--allow-external",
+        action="store_true",
+        help="Permit --to outside the current directory tree (default: refused, "
+        "so secrets can't leak to /tmp/~/etc.)",
+    )
+    p.set_defaults(
+        func=lambda a: store.cmd_load(a.project, a.env, a.to, a.redacted, a.allow_external)
+    )
 
     p = sub.add_parser("push", help="Dry-run push plan by default; --apply executes")
     p.add_argument("project")

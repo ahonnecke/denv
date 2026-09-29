@@ -161,10 +161,11 @@ def test_get_unmask(home, capsys):
 
 
 # --- load: 0600, no secret values printed -----------------------------------
-def test_load_writes_0600_no_values_printed(home, tmp_path, capsys):
+def test_load_writes_0600_no_values_printed(home, tmp_path, monkeypatch, capsys):
     _make_project(home)
+    monkeypatch.chdir(tmp_path)
     dst = tmp_path / "out.env"
-    store.cmd_load("proj", "staging", to=str(dst))
+    store.cmd_load("proj", "staging", to="out.env")
     out = capsys.readouterr().out
     assert "stg-token-xyz" not in out
     assert "ARA_6Lsandbox" not in out
@@ -176,10 +177,11 @@ def test_load_writes_0600_no_values_printed(home, tmp_path, capsys):
 
 
 # --- load --redacted: secrets redacted, public kept -------------------------
-def test_load_redacted(home, tmp_path, capsys):
+def test_load_redacted(home, tmp_path, monkeypatch, capsys):
     _make_project(home)
+    monkeypatch.chdir(tmp_path)
     dst = tmp_path / "red.env"
-    store.cmd_load("proj", "staging", to=str(dst), redacted=True)
+    store.cmd_load("proj", "staging", to="red.env", redacted=True)
     out = capsys.readouterr().out
     assert "secrets redacted" in out
     body = dst.read_text()
@@ -192,6 +194,47 @@ def test_load_redacted(home, tmp_path, capsys):
     assert "API_URL=https://api.example.com" in body
     assert "ADMIN_EMAIL=admin@example.com" in body
     assert _mode(str(dst)) == "600"
+
+
+# --- load --to guardrail: refuse writes outside the cwd tree ----------------
+def test_load_refuses_target_outside_cwd(home, tmp_path, monkeypatch):
+    _make_project(home)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    outside = tmp_path / "outside.env"  # sibling of cwd, above it
+    with pytest.raises(DenvError, match="outside the current directory tree"):
+        store.cmd_load("proj", "staging", to=str(outside))
+    assert not outside.exists()  # nothing written
+
+
+def test_load_refuses_dotdot_escape(home, tmp_path, monkeypatch):
+    _make_project(home)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    with pytest.raises(DenvError, match="outside the current directory tree"):
+        store.cmd_load("proj", "staging", to="../escape.env")
+    assert not (tmp_path / "escape.env").exists()
+
+
+def test_load_allow_external_overrides_guard(home, tmp_path, monkeypatch):
+    _make_project(home)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    outside = tmp_path / "outside.env"
+    store.cmd_load("proj", "staging", to=str(outside), allow_external=True)
+    assert outside.exists()
+    assert _mode(str(outside)) == "600"
+
+
+def test_load_allows_nested_within_cwd(home, tmp_path, monkeypatch):
+    _make_project(home)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "sub").mkdir()
+    store.cmd_load("proj", "staging", to="sub/ok.env")
+    assert (tmp_path / "sub" / "ok.env").exists()
 
 
 # --- push dry-run plan strings per adapter (masked) -------------------------

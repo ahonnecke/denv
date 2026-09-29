@@ -261,16 +261,50 @@ def cmd_get(project: str, env: str, key: str, unmask: bool = False) -> None:
         print(mask(val))
 
 
-def cmd_load(project: str, env: str, to: str = "./.env", redacted: bool = False) -> None:
+def _within_cwd(to: str) -> bool:
+    """True if ``to`` resolves inside the current working directory tree.
+
+    Canonicalizes ``..`` and symlinks in the parent before comparing, so a
+    path cannot escape via ``./a/../../tmp/x`` or a symlinked parent. A
+    non-existent parent still resolves to its literal absolute path.
+    """
+    root = os.path.realpath(os.getcwd())
+    target = os.path.abspath(os.path.expanduser(to))
+    parent = os.path.realpath(os.path.dirname(target) or os.getcwd())
+    resolved = os.path.join(parent, os.path.basename(target))
+    try:
+        return os.path.commonpath([resolved, root]) == root
+    except ValueError:
+        return False  # different drives / uncomparable
+
+
+def cmd_load(
+    project: str,
+    env: str,
+    to: str = "./.env",
+    redacted: bool = False,
+    allow_external: bool = False,
+) -> None:
     """Write a merged env file (mode 600); never prints values.
 
     With ``redacted=True``, every key classified ``secret`` has its value
     replaced by a redaction placeholder (public keys keep real values), so the
     written file is safe to share/log.
+
+    The output target must resolve inside the current working directory tree
+    (e.g. a project's gitignored ``.env.<env>.ops``); a path outside it — ``/tmp``,
+    ``~``, ``../..`` — is refused so unredacted secrets cannot leak to arbitrary
+    locations. Pass ``allow_external=True`` to override deliberately.
     """
     d, m = load_manifest(project)
     if not env:
         raise DenvError("load needs an env")
+    if not allow_external and not _within_cwd(to):
+        raise DenvError(
+            f"refusing to write secrets to {to!r}: outside the current directory tree "
+            f"({os.getcwd()}). Render to a gitignored path under it (e.g. .env.{env}.ops), "
+            "or pass --allow-external to override."
+        )
     keys = keys_present_in_env(d, m, env)
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     lines: List[str] = []

@@ -28,6 +28,11 @@ the store needs. Reuse-before-invent.
 - Direnv-prompt cruft split out to `~/src/project-context/`.
 - Onboarded stores live in `~/.config/`: `encore_werks` (greenfield), `chitchat` (descriptive
   map of a legacy mixed layout; deployed config still Spaces-owned).
+- **Scope reduction (2026-09-29, #1):** `load --to` is now confined to the current directory
+  tree — a target under `/tmp`, `~`, `../..` is refused (canonicalizes `..`/symlinks first),
+  `--allow-external` overrides. Root cause: unconstrained `--to` let sessions/scripts render
+  full unredacted secrets to `/tmp` (chitchat's `/tmp/prod.backend.env` etc.), defeating
+  "secrets safe by construction." 4 new tests; suite 71 green.
 
 ## NEXT
 - Push both repos (this + claude-config) once reviewed — user's call.

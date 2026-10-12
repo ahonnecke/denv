@@ -477,3 +477,132 @@ def cmd_init(project: str, envs: Optional[List[str]] = None) -> None:
         print(f"  {e}.env" + " " * (12 - len(e)) + f"(KEY=VALUE for {e}, mode 600)")
     print("next: add KEY=VALUE to the value files, classify keys in the manifest, then:")
     print(f"  denv ls {project}        denv doctor {project}        denv push {project} <env>   (dry-run)")
+
+
+# --- consumption: exec + repo pointer ---------------------------------------
+POINTER = ".denv"
+
+
+def merged_env(d: str, m: Manifest, env: str) -> Dict[str, str]:
+    """The project's resolved {KEY: VALUE} for an env (same keys ``load`` writes).
+
+    Reuses the store's own resolution; the caller decides where it goes (a file,
+    a child process). Never printed here.
+    """
+    return {k: raw_value(d, m, env, k) for k in keys_present_in_env(d, m, env)}
+
+
+def parse_pointer(path: str) -> Dict[str, str]:
+    """Parse a ``.denv`` repo pointer: ``key = value`` lines, ``#`` comments.
+
+    Recognizes ``project`` and ``env``; other keys are ignored. Non-secret by
+    design — the pointer names a store and a default env, nothing more.
+    """
+    out: Dict[str, str] = {}
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def find_pointer(start: Optional[str] = None) -> Optional[Tuple[str, Optional[str], str]]:
+    """Walk up from ``start`` (cwd) to the filesystem root for a ``.denv``.
+
+    Returns ``(project, env_or_None, path)`` for the nearest one, else ``None``.
+    """
+    d = os.path.abspath(start or os.getcwd())
+    while True:
+        p = os.path.join(d, POINTER)
+        if os.path.isfile(p):
+            data = parse_pointer(p)
+            proj = data.get("project")
+            if proj:
+                return proj, (data.get("env") or None), p
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def resolve_target(
+    project: Optional[str], env: Optional[str]
+) -> Tuple[str, str]:
+    """Fill a missing project/env from the nearest ``.denv`` pointer.
+
+    Explicit arguments win; the pointer supplies whatever is omitted. Errors
+    with actionable guidance when neither source yields a project or env.
+    """
+    if project is None or env is None:
+        ptr = find_pointer()
+        if ptr:
+            p_proj, p_env, _ = ptr
+            if project is None:
+                project = p_proj
+            if env is None:
+                env = p_env
+    if not project:
+        raise DenvError(
+            "no project: pass one (`denv exec <project> <env> -- ...`) or add a "
+            "repo pointer (`denv link <project> <env>` writes .denv)"
+        )
+    if not env:
+        raise DenvError(
+            f"no env: the .denv pointer for {project} declares none; pass one "
+            f"(`denv exec {project} <env> -- ...`)"
+        )
+    return project, env
+
+
+def cmd_link(project: str, env: str, to: str = POINTER) -> None:
+    """Write a committable ``.denv`` repo pointer (project + default env).
+
+    Validates the store exists and the env is declared, so a pointer never names
+    a target that isn't there. The file is non-secret and intended to be
+    committed — no 600, unlike a rendered env file.
+    """
+    _, m = load_manifest(project)
+    if m.envs and env not in m.envs:
+        raise DenvError(
+            f"env {env!r} not declared for {project} (declared: {', '.join(m.envs)})"
+        )
+    content = (
+        "# denv repo pointer — committable (names a store + default env; no secrets).\n"
+        "# `denv exec -- <cmd>` runs a command with this env injected; override the\n"
+        "# env with `denv exec <env> -- <cmd>`. See `denv exec -h`.\n"
+        f"project = {project}\n"
+        f"env = {env}\n"
+    )
+    with open(to, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    print(f"wrote {to} -> {project} (default env {env}); commit it. Run: denv exec -- <cmd>")
+
+
+def cmd_exec(project: Optional[str], env: Optional[str], cmd: List[str]) -> None:
+    """Run ``cmd`` with the project's merged env injected — no file written.
+
+    Resolves project/env from the ``.denv`` pointer when omitted, builds the
+    merged env over the current environment, and ``execvpe``'s the command so
+    its exit status propagates to the caller (Make, a shell). Secrets live only
+    in the child's memory, never on disk.
+    """
+    if not cmd:
+        raise DenvError("exec needs a command after `--` (e.g. `denv exec -- ./script.sh`)")
+    project, env = resolve_target(project, env)
+    d, m = load_manifest(project)
+    if m.envs and env not in m.envs:
+        warn(f"env {env!r} not in {project} manifest (declared: {', '.join(m.envs)})")
+    child_env = dict(os.environ)
+    child_env.update(merged_env(d, m, env))
+    # Marker so a consumer can trust the injected env and skip sourcing its own
+    # fallback files (and know which denv context it is running under).
+    child_env["DENV_ACTIVE"] = "1"
+    child_env["DENV_PROJECT"] = project
+    child_env["DENV_ENV"] = env
+    try:
+        os.execvpe(cmd[0], cmd, child_env)
+    except FileNotFoundError:
+        raise DenvError(f"command not found: {cmd[0]}")

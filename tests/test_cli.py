@@ -165,3 +165,38 @@ class TestCLI:
 
         result = out.getvalue()
         assert "API_KEY=***HIDDEN***" in result
+
+
+class TestExecRouting:
+    """`denv exec` arg-splitting through main() (store calls are stubbed)."""
+
+    def test_exec_splits_target_and_command(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            "denv.cli.store.cmd_exec", lambda p, e, c: calls.append((p, e, c))
+        )
+        main(["exec", "--", "echo", "hi"])
+        main(["exec", "staging", "--", "echo", "hi"])
+        main(["exec", "proj", "prod", "--", "ls", "-l"])
+        main(["exec", "echo", "hi"])  # no `--`: whole tail is the command
+        assert calls == [
+            (None, None, ["echo", "hi"]),
+            (None, "staging", ["echo", "hi"]),
+            ("proj", "prod", ["ls", "-l"]),
+            (None, None, ["echo", "hi"]),
+        ]
+
+    def test_exec_help_and_empty(self, capsys):
+        main(["exec", "-h"])
+        assert "usage: denv exec" in capsys.readouterr().out
+        main(["exec"])
+        assert "usage: denv exec" in capsys.readouterr().out
+
+    def test_link_routes(self, monkeypatch):
+        calls = {}
+        monkeypatch.setattr(
+            "denv.cli.store.cmd_link",
+            lambda p, e, to: calls.update(p=p, e=e, to=to),
+        )
+        main(["link", "proj", "dev"])
+        assert calls["p"] == "proj" and calls["e"] == "dev"

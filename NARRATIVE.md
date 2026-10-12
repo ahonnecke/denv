@@ -34,6 +34,18 @@ the store needs. Reuse-before-invent.
   full unredacted secrets to `/tmp` (chitchat's `/tmp/prod.backend.env` etc.), defeating
   "secrets safe by construction." 4 new tests; suite 71 green.
 
+- **Consumption ergonomics (2026-10-12):** the only way to feed a project's env to a
+  consumer was `load --to <file>` + source it — per-project boilerplate, a secret file at
+  rest, the `--to` tree-confinement dance, and a README prose step to adopt. Root-cause fix:
+  make consumption first-class. `denv exec [project [env]] -- <cmd>` injects the merged env
+  into a child process (no file; reuses `keys_present_in_env`/`raw_value`, then `execvpe`).
+  A committable `.denv` repo pointer (`project` + default `env`, non-secret) lets a repo
+  *be* a denv consumer by committing one file; `denv exec` resolves project/env from it
+  (1 positional = env override, 2 = explicit project+env). `denv link <project> <env>`
+  writes the pointer. `load --to` stays for genuine file-consumers (docker compose
+  `--env-file`). encore_werks migrated: `.denv` committed, `db_sync.sh` sourcing loop
+  removed, `.env.dev.ops` retired.
+
 ## NEXT
 - Push both repos (this + claude-config) once reviewed — user's call.
 - Real `push --apply` adapters get exercised as each env is first deployed (dry-run until then).

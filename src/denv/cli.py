@@ -128,6 +128,64 @@ def _add_store_parsers(sub) -> None:
     p.add_argument("envs", nargs="*", help="Envs to scaffold (default: dev)")
     p.set_defaults(func=lambda a: store.cmd_init(a.project, a.envs))
 
+    p = sub.add_parser("link", help="Write a committable .denv repo pointer (project + env)")
+    p.add_argument("project")
+    p.add_argument("env")
+    p.add_argument("--to", default=store.POINTER, help=f"Pointer path (default: {store.POINTER})")
+    p.set_defaults(func=lambda a: store.cmd_link(a.project, a.env, a.to))
+
+    # `exec` captures its tail with REMAINDER so the command's own flags and the
+    # `--` separator pass through untouched; _run_exec splits them (add_help=False
+    # so a `-h` in the command is not hijacked).
+    p = sub.add_parser(
+        "exec",
+        help="Run a command with the merged env injected (no file; reads .denv)",
+        add_help=False,
+    )
+    p.add_argument("rest", nargs=argparse.REMAINDER)
+    p.set_defaults(func=lambda a: _run_exec(a.rest))
+
+
+_EXEC_USAGE = """\
+usage: denv exec [project [env]] -- <command> ...
+
+Run <command> with the project's merged env injected into its environment
+(no file written; secrets live only in the child process).
+
+Resolving the target:
+  denv exec -- <cmd>              project + env from the nearest .denv pointer
+  denv exec <env> -- <cmd>        project from .denv, env overridden
+  denv exec <project> <env> -- <cmd>   fully explicit (no pointer needed)
+
+Adopt denv in a repo:  denv link <project> <env>   (writes a committable .denv)
+
+The child sees DENV_ACTIVE=1, DENV_PROJECT, DENV_ENV — a script can use these to
+trust the injected env and skip sourcing its own fallback .env files."""
+
+
+def _run_exec(rest) -> None:
+    """Split ``[project [env]] -- cmd...`` deterministically and run cmd_exec."""
+    rest = list(rest or [])
+    if not rest or rest[0] in ("-h", "--help"):
+        print(_EXEC_USAGE)
+        return
+    if "--" in rest:
+        i = rest.index("--")
+        pre, cmd = rest[:i], rest[i + 1:]
+    else:
+        pre, cmd = [], rest  # no `--`: whole tail is the command, target from .denv
+    if len(pre) == 0:
+        project, env = None, None
+    elif len(pre) == 1:
+        project, env = None, pre[0]  # a lone positional is the env override
+    elif len(pre) == 2:
+        project, env = pre[0], pre[1]
+    else:
+        raise store.DenvError(
+            f"exec takes at most `project env` before `--`, got {pre!r}\n{_EXEC_USAGE}"
+        )
+    store.cmd_exec(project, env, cmd)
+
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser with subcommands."""
@@ -144,6 +202,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> None:
     """Main entry point for the denv CLI."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # `exec` is parsed by hand: argparse's REMAINDER mishandles a leading flag
+    # (e.g. `denv exec -h`), and we want the command's tail wholly untouched.
+    if argv and argv[0] == "exec":
+        try:
+            _run_exec(argv[1:])
+        except store.DenvError as exc:
+            print(f"{store.SELF}: {exc}", file=sys.stderr)
+            sys.exit(2)
+        return
     ap = build_parser()
     args = ap.parse_args(argv)
     if not getattr(args, "func", None):

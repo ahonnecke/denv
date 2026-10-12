@@ -361,3 +361,112 @@ def test_init_refuses_clobber(home):
     store.cmd_init("dup")
     with pytest.raises(DenvError):
         store.cmd_init("dup")
+
+
+# --- consumption: merged_env, .denv pointer, link, exec ---------------------
+def test_merged_env_matches_store(home):
+    _make_project(home)
+    d, m = store.load_manifest("proj")
+    env = store.merged_env(d, m, "staging")
+    assert env["API_URL"] == "https://api.example.com"
+    assert env["API_TOKEN"] == "stg-token-xyz"
+    assert env["DB_HOST"] == "staging.db.local"  # env-scoped from: resolves
+
+
+def test_parse_pointer(tmp_path):
+    p = tmp_path / ".denv"
+    p.write_text("# a comment\nproject = proj\nenv = staging\n\n")
+    assert store.parse_pointer(str(p)) == {"project": "proj", "env": "staging"}
+
+
+def test_find_pointer_walks_up(tmp_path, monkeypatch):
+    (tmp_path / ".denv").write_text("project = proj\nenv = prod\n")
+    sub = tmp_path / "a" / "b"
+    sub.mkdir(parents=True)
+    monkeypatch.chdir(sub)
+    got = store.find_pointer()
+    assert got is not None
+    proj, env, _ = got
+    assert (proj, env) == ("proj", "prod")
+
+
+def test_find_pointer_none(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert store.find_pointer() is None
+
+
+def test_resolve_target_pointer_and_overrides(tmp_path, monkeypatch):
+    (tmp_path / ".denv").write_text("project = proj\nenv = prod\n")
+    monkeypatch.chdir(tmp_path)
+    assert store.resolve_target(None, None) == ("proj", "prod")
+    assert store.resolve_target(None, "staging") == ("proj", "staging")  # env override
+    assert store.resolve_target("other", "dev") == ("other", "dev")  # explicit wins
+
+
+def test_resolve_target_no_project_errors(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(DenvError, match="no project"):
+        store.resolve_target(None, None)
+
+
+def test_cmd_link_writes_committable_pointer(home, tmp_path, monkeypatch):
+    _make_project(home)
+    monkeypatch.chdir(tmp_path)
+    store.cmd_link("proj", "staging")
+    ptr = tmp_path / ".denv"
+    assert ptr.is_file()
+    assert _mode(ptr) != "600"  # committable, not a secret file
+    assert store.parse_pointer(str(ptr)) == {"project": "proj", "env": "staging"}
+
+
+def test_cmd_link_rejects_undeclared_env(home, tmp_path, monkeypatch):
+    _make_project(home)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(DenvError, match="not declared"):
+        store.cmd_link("proj", "nope")
+
+
+def test_cmd_exec_injects_env_and_inherits_parent(home, monkeypatch):
+    _make_project(home)
+    captured = {}
+    monkeypatch.setattr(
+        store.os, "execvpe",
+        lambda f, a, e: captured.update(file=f, args=list(a), env=dict(e)),
+    )
+    store.cmd_exec("proj", "staging", ["true", "--x"])
+    assert captured["file"] == "true"
+    assert captured["args"] == ["true", "--x"]
+    assert captured["env"]["API_TOKEN"] == "stg-token-xyz"
+    assert captured["env"]["API_URL"] == "https://api.example.com"
+    assert "PATH" in captured["env"]  # parent environment inherited
+    assert captured["env"]["DENV_ACTIVE"] == "1"  # marker for consumers
+    assert captured["env"]["DENV_PROJECT"] == "proj"
+    assert captured["env"]["DENV_ENV"] == "staging"
+
+
+def test_cmd_exec_resolves_from_pointer(home, tmp_path, monkeypatch):
+    _make_project(home)
+    (tmp_path / ".denv").write_text("project = proj\nenv = prod\n")
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+    monkeypatch.setattr(
+        store.os, "execvpe", lambda f, a, e: captured.update(env=dict(e))
+    )
+    store.cmd_exec(None, None, ["true"])
+    assert captured["env"]["API_TOKEN"] == "prod-token-abc"
+
+
+def test_cmd_exec_no_command_errors(home):
+    _make_project(home)
+    with pytest.raises(DenvError, match="needs a command"):
+        store.cmd_exec("proj", "staging", [])
+
+
+def test_cmd_exec_missing_binary_errors(home, monkeypatch):
+    _make_project(home)
+    monkeypatch.setattr(
+        store.os, "execvpe",
+        lambda f, a, e: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+    with pytest.raises(DenvError, match="command not found"):
+        store.cmd_exec("proj", "staging", ["definitely-not-a-binary"])

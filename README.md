@@ -54,14 +54,44 @@ An **existing store with a flat `.env`** needs no init — drop a `manifest` bes
 ```sh
 denv ls     myproj [env]               # keys × class × llm × value|mask
 denv get    myproj prod API_URL        # one value (add --unmask to reveal a secret)
-denv load   myproj dev --to .env       # LOCAL APP: write a 600 .env (cwd-tree only), values never printed
+denv exec   myproj dev -- <cmd ...>    # LOCAL APP/OPS: run <cmd> with the env injected (no file)
+denv load   myproj dev --to .env       # when a tool needs a real file: write a 600 .env (cwd-tree only)
 denv load   myproj dev --redacted      # a shareable/loggable copy: secret values redacted
+denv link   myproj dev                 # write a committable .denv so `denv exec` needs no args here
 denv push   myproj prod                # DEPLOY: dry-run plan; add --apply to execute
 denv doctor myproj                     # perms (incl. from: files) + declared-vs-present
 denv envs   myproj
 denv init   myproj [env ...]
 denv redact [file ...] [--mode values|keys|both] [--keep-length] [--strip-secrets] [-o OUT]
 ```
+
+## Use it from a project (no boilerplate, no secret file)
+
+`denv exec` injects the merged env straight into a command — nothing is written to disk, so
+there is no file to source, gitignore, or leak:
+
+```sh
+denv exec myproj dev -- ./scripts/deploy.sh      # explicit project + env
+```
+
+Make a repo a denv consumer by committing one small non-secret pointer:
+
+```sh
+denv link myproj dev        # writes .denv (project + default env); commit it
+```
+
+With `.denv` in the tree, `denv exec` resolves the target itself — a Makefile target becomes:
+
+```make
+DENV_ENV ?= dev
+deploy: ; @denv exec $(DENV_ENV) -- ./scripts/deploy.sh
+```
+
+Resolution: `denv exec -- <cmd>` uses the pointer's project + default env; `denv exec prod --
+<cmd>` overrides the env; `denv exec proj env -- <cmd>` is fully explicit. The child process
+sees `DENV_ACTIVE=1`, `DENV_PROJECT`, `DENV_ENV` — a script can key off `DENV_ACTIVE` to trust
+the injected env and skip any local fallback files. Reach for `load --to` only when a tool reads
+a file itself (e.g. `docker compose --env-file`).
 
 ## Manifest grammar
 
